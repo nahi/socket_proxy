@@ -6,7 +6,7 @@
 # This application is copyrighted free software by NAKAMURA, Hiroshi.
 # You can redistribute it and/or modify it under the same term as Ruby.
 
-RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.7 2000/08/21 03:26:25 nakahiro Exp $
+RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.8 2000/08/27 03:47:47 nakahiro Exp $
 
 # Ruby bundled library
 require 'socket'
@@ -23,6 +23,12 @@ require 'dump'
 class TCPSocketPipe < Application
   include Log::Severity
   include Socket::Constants
+
+  attr_accessor :dumpRequest
+  attr_accessor :dumpResponse
+  attr_accessor :dumpBytes
+  attr_accessor :dumpBigEndian
+  attr_accessor :dumpWidth
 
   private
 
@@ -71,21 +77,24 @@ class TCPSocketPipe < Application
   ShiftAge = 0
   ShiftSize = 0
 
-  def initialize( srcPort, destName, destPort, options )
+  def initialize( srcPort, destName, destPort )
     super( AppName )
     setLog( AppName + '.log', ShiftAge, ShiftSize )
     @srcPort = srcPort.to_i
     @destName = destName
     @destPort = destPort.to_i
-    @options = options
+    @dumpRequest = true
+    @dumpResponse = false
+    @dumpBytes = 1
+    @dumpWidth = 16
+    @dumpBigEndian = false
     @sessionPool = SessionPool.new()
   end
 
   def run()
-    @waitSock = TCPserver::new( @srcPort )
+    @waitSock = TCPServer::new( @srcPort )
     begin
-      log( SEV_INFO, 'Started ... SrcPort=%s, DestName=%s, DestPort=%s' %
-      	[ @srcPort, @destName, @destPort ] )
+      log( SEV_INFO, 'Started ... SrcPort=%s, DestName=%s, DestPort=%s' % [ @srcPort, @destName, @destPort ] )
 
       while true
         readWait = []
@@ -99,7 +108,10 @@ class TCPSocketPipe < Application
 	  if ( @waitSock.equal?( sock ))
 	    newSock = @waitSock.accept
 	    log( SEV_INFO, 'Accepted ... from ' << newSock.peeraddr[2] )
-	    addSession( newSock )
+	    if !addSession( newSock )
+      	      log( SEV_INFO, 'Closing server socket...' )
+	      newSock.close()
+	    end
 	  else
 	    @sessionPool.each do |session|
 	      transfer( session, true ) if ( sock.equal?( session.server ))
@@ -110,13 +122,13 @@ class TCPSocketPipe < Application
       end
     ensure
       @waitSock.close()
-      log( SEV_INFO, 'Stopped ... SrcPort=%s, DestName=%s, DestPort=%s' %
-      	[ @srcPort, @destName, @destPort ] )
+      log( SEV_INFO, 'Stopped ... SrcPort=%s, DestName=%s, DestPort=%s' % [ @srcPort, @destName, @destPort ] )
     end
   end
 
   def transfer( session, bServer )
-    readSock = writeSock = nil
+    readSock = nil
+    writeSock = nil
     if ( bServer )
       readSock = session.server
       writeSock = session.client
@@ -136,19 +148,18 @@ class TCPSocketPipe < Application
       closeSession( session )
       return
     rescue
-      log( SEV_WARN, "Detected an exception. Stopping ... #{$!}\n" << $@.join(
-	"\n" ))
+      log( SEV_WARN, "Detected an exception. Stopping ... #{$!}\n" << $@.join( "\n" ))
       closeSession( session )
       return
     end
 
     if ( bServer )
       log( SEV_INFO, 'Transfer data ... [src] -> [dest]' )
+      dumpData( readBuf ) if @dumpRequest
     else
       log( SEV_INFO, 'Transfer data ... [src] <- [dest]' )
+      dumpData( readBuf ) if @dumpResponse
     end
-
-    dumpData( readBuf ) if ( bServer or @options[0] )
 
     writeSize = 0
     while ( writeSize < readBuf.size )
@@ -168,12 +179,12 @@ class TCPSocketPipe < Application
   end
 
   def dumpData( data )
-    log( SEV_INFO, "\n" << Debug::dump( data, "x1" ))
+    log( SEV_INFO, "Transferred data;\n" << Debug::dump( data, "x#{ @dumpBytes }", @dumpBigEndian, @dumpWidth, 0 ))
   end
 
   def addSession( serverSock )
     begin
-      clientSock = TCPsocket.new( @destName, @destPort )
+      clientSock = TCPSocket.new( @destName, @destPort )
     rescue
       log( SEV_ERROR, 'Create client socket failed.' )
       return
@@ -191,12 +202,16 @@ class TCPSocketPipe < Application
 end
 
 def main()
-  getopts( 'd', 'x:' )
+  getopts( 'd', 'e', 'w:', 'x:' )
   srcPort = ARGV.shift
   destName = ARGV.shift
   destPort = ARGV.shift
   usage() if ( !srcPort or !destName or !destPort )
-  app = TCPSocketPipe::new( srcPort, destName, destPort, [ $OPT_d, $OPT_x ])
+  app = TCPSocketPipe::new( srcPort, destName, destPort )
+  app.dumpResponse = true if $OPT_d
+  app.dumpBigEndian = true if $OPT_e
+  app.dumpWidth = $OPT_w.to_i if $OPT_w
+  app.dumpBytes = $OPT_x.to_i if $OPT_x
   app.start()
 end
 
@@ -206,12 +221,15 @@ Usage: #{$0} srcPort destName destPort
 
     Creates I/O pipes for TCP socket tunneling.
 
-    srcPort .... port# of a source(on your machine).
+    srcPort .... source port# on your machine.
     destName ... machine name of a destination(name or ip-addr).
-    destPort ... port# of a destination.
+    destPort ... destination port# of the destName.
 
+  Dump options:
     -d ......... dumps data from destination port(not dumped by default).
-    -x [num] ... hex dump. formatted num chars in each line.
+    -e ......... interprets bytes as big endian.
+    -x [num] ... interprets each [num] bytes.
+    -w [num] ... dump [num] bytes in each line.
 
 #{RCS_ID}
 EOM
