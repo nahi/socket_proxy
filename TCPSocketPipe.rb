@@ -6,7 +6,7 @@
 # This application is copyrighted free software by NAKAMURA, Hiroshi.
 # You can redistribute it and/or modify it under the same term as Ruby.
 
-RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.8 2000/08/27 03:47:47 nakahiro Exp $
+RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.9 2000/09/25 04:54:01 nakahiro Exp $
 
 # Ruby bundled library
 require 'socket'
@@ -38,7 +38,7 @@ class TCPSocketPipe < Application
   class SessionPool
     public
 
-    def each()
+    def each
       @pool.each do |i|
 	yield i
       end
@@ -68,7 +68,7 @@ class TCPSocketPipe < Application
       end
     end
 
-    def initialize()
+    def initialize
       @pool = []
     end
   end
@@ -91,8 +91,8 @@ class TCPSocketPipe < Application
     @sessionPool = SessionPool.new()
   end
 
-  def run()
-    @waitSock = TCPServer::new( @srcPort )
+  def run
+    @waitSock = TCPServer.new( @srcPort )
     begin
       log( SEV_INFO, 'Started ... SrcPort=%s, DestName=%s, DestPort=%s' % [ @srcPort, @destName, @destPort ] )
 
@@ -179,7 +179,7 @@ class TCPSocketPipe < Application
   end
 
   def dumpData( data )
-    log( SEV_INFO, "Transferred data;\n" << Debug::dump( data, "x#{ @dumpBytes }", @dumpBigEndian, @dumpWidth, 0 ))
+    log( SEV_INFO, "Transferred data;\n" << Debug.dump( data, "x#{ @dumpBytes }", @dumpBigEndian, @dumpWidth, 0 ))
   end
 
   def addSession( serverSock )
@@ -201,13 +201,22 @@ class TCPSocketPipe < Application
   end
 end
 
-def main()
+def main
   getopts( 'd', 'e', 'w:', 'x:' )
   srcPort = ARGV.shift
   destName = ARGV.shift
   destPort = ARGV.shift
   usage() if ( !srcPort or !destName or !destPort )
-  app = TCPSocketPipe::new( srcPort, destName, destPort )
+
+  # Run as a daemon...
+  exit! if fork
+  Process.setsid
+  exit! if fork
+  STDIN.close
+  STDOUT.close
+  STDERR.close
+
+  app = TCPSocketPipe.new( srcPort, destName, destPort )
   app.dumpResponse = true if $OPT_d
   app.dumpBigEndian = true if $OPT_e
   app.dumpWidth = $OPT_w.to_i if $OPT_w
@@ -215,7 +224,7 @@ def main()
   app.start()
 end
 
-def usage()
+def usage
   STDERR.print <<EOM
 Usage: #{$0} srcPort destName destPort
 
