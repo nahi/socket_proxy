@@ -6,7 +6,7 @@
 # This application is copyrighted free software by NAKAMURA, Hiroshi.
 # You can redistribute it and/or modify it under the same term as Ruby.
 
-RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.6 2000/08/21 03:16:17 nakahiro Exp $
+RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.7 2000/08/21 03:26:25 nakahiro Exp $
 
 # Ruby bundled library
 require 'socket'
@@ -168,7 +168,7 @@ class TCPSocketPipe < Application
   end
 
   def dumpData( data )
-    log( SEV_INFO, Debug::dump( data, "x1" ))
+    log( SEV_INFO, "\n" << Debug::dump( data, "x1" ))
   end
 
   def addSession( serverSock )
