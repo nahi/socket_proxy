@@ -1,12 +1,12 @@
 #!/usr/bin/env ruby
 
 # TCPSocketPipe.rb -- Creates I/O pipes for TCP socket tunneling.
-# Copyright (C) 1999, 2000 NAKAMURA, Hiroshi
+# Copyright (C) 1999-2001 NAKAMURA, Hiroshi
 
 # This application is copyrighted free software by NAKAMURA, Hiroshi.
 # You can redistribute it and/or modify it under the same term as Ruby.
 
-RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.11 2001/07/13 04:15:44 nakahiro Exp $
+RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.12 2001/07/13 04:16:55 nakahiro Exp $
 
 # Ruby bundled library
 require 'socket'
