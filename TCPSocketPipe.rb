@@ -6,11 +6,12 @@
 # This application is copyrighted free software by NAKAMURA, Hiroshi.
 # You can redistribute it and/or modify it under the same term as Ruby.
 
-RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.4 2000/01/01 01:57:37 nakahiro Exp $
+RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.5 2000/08/21 03:11:05 nakahiro Exp $
 
 require 'socket'
 require 'getopts'
 require 'application'
+require 'dump'
 
 class TCPSocketPipe < Application
   include Log::Severity
@@ -66,9 +67,9 @@ class TCPSocketPipe < Application
   def initialize( srcPort, destName, destPort, options )
     super( AppName )
     setLog( AppName + '.log', ShiftAge, ShiftSize )
-    @srcPort = srcPort.to_i or raise ArgumentError()
-    @destName = destName or raise ArgumentError()
-    @destPort = destPort.to_i or raise ArgumentError()
+    @srcPort = srcPort.to_i
+    @destName = destName
+    @destPort = destPort.to_i
     @options = options
     @sessionPool = SessionPool.new()
   end
@@ -160,29 +161,7 @@ class TCPSocketPipe < Application
   end
 
   def dumpData( data )
-    hexDump = @options[1].to_i
-    dumpStr = "Transferred data...\n"
-    if ( hexDump )
-      charInLine = if ( hexDump == 0 ) then 16 else hexDump end
-      lineBuf = ''
-      0.upto( data.size - 1 ) do |i|
-	lineBuf <<
-	  if (( data[i] >= 0x20 ) and ( data[i] <= 0x7f ))
-	    data[i, 1]
-	  else
-	    '.'
-	  end
-	dumpStr << '%02x ' % ( 0xff & data[i] )
-	if ( i % charInLine == ( charInLine - 1 ))
-	  dumpStr << "  #{lineBuf}\n" 
-	  lineBuf = ''
-	end
-      end
-      dumpStr << "  #{lineBuf}\n"
-    else
-      dumpStr = data
-    end
-    log( SEV_INFO, dumpStr )
+    log( SEV_INFO, Debug::dump( data, "x1" ))
   end
 
   def addSession( serverSock )
