@@ -1,30 +1,28 @@
 #!/usr/bin/env ruby
 
-RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.2 1999/07/03 10:26:56 nakahiro Exp $
+# TCPSocketPipe.rb -- Creates I/O pipes for TCP socket tunneling.
+# Copyright (C) 1999, 2000 NAKAMURA, Hiroshi
+
+# This application is copyrighted free software by NAKAMURA, Hiroshi.
+# You can redistribute it and/or modify it under the same term as Ruby.
+
+RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.3 2000/01/01 01:49:04 nakahiro Exp $
 
 require 'socket'
 require 'getopts'
-require 'KNLog.rb'
+require 'application'
 
-class TCPSocketPipe
+class TCPSocketPipe < Application
+  include Log::Severity
   include Socket::Constants
+
+  private
 
   Timeout = 100			# [sec]
   ReadBlockSize = 10 * 1024	# [byte]
 
   class SessionPool
-    class Session
-      attr( :server )
-      attr( :client )
-      def initialize( server = nil, client = nil )
-      	@server = server
-      	@client = client
-      end
-    end
-
-    def initialize()
-      @pool = []
-    end
+    public
 
     def each()
       @pool.each do |i|
@@ -41,61 +39,75 @@ class TCPSocketPipe
         session.equal?( i )
       end
     end
+
+    private
+
+    class Session
+      attr( :server )
+      attr( :client )
+
+      private
+
+      def initialize( server = nil, client = nil )
+      	@server = server
+      	@client = client
+      end
+    end
+
+    def initialize()
+      @pool = []
+    end
   end
 
-  def initialize( srcPort, destName, destPort, log, options )
+  AppName = 'TCPSocketPipe'
+  ShiftAge = 0
+  ShiftSize = 0
+
+  def initialize( srcPort, destName, destPort, options )
+    super( AppName )
+    setLog( AppName + '.log', ShiftAge, ShiftSize )
     @srcPort = srcPort.to_i or raise ArgumentError()
     @destName = destName or raise ArgumentError()
     @destPort = destPort.to_i or raise ArgumentError()
-    @log = log
     @options = options
     @sessionPool = SessionPool.new()
-    begin
-      @waitSock = TCPserver.new( @srcPort )
-      @log.add( KNLog::SEV_INFO,
-      	'Started ... SrcPort=%s, DestName=%s, DestPort=%s' %
-      	[ @srcPort, @destName, @destPort ], self.type )
-      run()
-    rescue
-      @log.add( KNLog::SEV_WARN,
-      	"Detected an exception. Stopping ... #{$!}\n" << $@.join( "\n" ),
-	self.type )
-      raise
-    ensure
-      @waitSock.close() if @waitSock
-      @log.add( KNLog::SEV_INFO,
-      	'Stopped ... SrcPort=%s, DestName=%s, DestPort=%s' %
-      	[ @srcPort, @destName, @destPort ], self.type )
-      @log.close()
-    end
   end
 
-  private; def run()
-    while true
-      readWait = []
-      @sessionPool.each do |session|
-	readWait.push( session.server ).push( session.client )
-      end
-      readWait.unshift( @waitSock )
-      readReady, writeReady, except = IO.select( readWait, nil, nil, Timeout )
-      next unless readReady
-      readReady.each do |sock|
-	if ( @waitSock.equal?( sock ))
-	  newSock = @waitSock.accept
-	  @log.add( KNLog::SEV_INFO, "Accepted ... from " <<
-	    newSock.peeraddr[2], 'run' )
-	  addSession( newSock )
-	else
-	  @sessionPool.each do |session|
-	    transfer( session, true ) if ( sock.equal?( session.server ))
-	    transfer( session, false ) if ( sock.equal?( session.client ))
+  def run()
+    @waitSock = TCPserver::new( @srcPort )
+    begin
+      log( SEV_INFO, 'Started ... SrcPort=%s, DestName=%s, DestPort=%s' %
+      	[ @srcPort, @destName, @destPort ] )
+
+      while true
+        readWait = []
+        @sessionPool.each do |session|
+	  readWait.push( session.server ).push( session.client )
+        end
+        readWait.unshift( @waitSock )
+        readReady, writeReady, except = IO.select( readWait, nil, nil, Timeout )
+        next unless readReady
+        readReady.each do |sock|
+	  if ( @waitSock.equal?( sock ))
+	    newSock = @waitSock.accept
+	    log( SEV_INFO, 'Accepted ... from ' << newSock.peeraddr[2] )
+	    addSession( newSock )
+	  else
+	    @sessionPool.each do |session|
+	      transfer( session, true ) if ( sock.equal?( session.server ))
+	      transfer( session, false ) if ( sock.equal?( session.client ))
+	    end
 	  end
 	end
       end
+    ensure
+      @waitSock.close()
+      log( SEV_INFO, 'Stopped ... SrcPort=%s, DestName=%s, DestPort=%s' %
+      	[ @srcPort, @destName, @destPort ] )
     end
   end
 
-  private; def transfer( session, bServer )
+  def transfer( session, bServer )
     readSock = writeSock = nil
     if ( bServer )
       readSock = session.server
@@ -112,25 +124,20 @@ class TCPSocketPipe
       closeSession( session )
       return
     rescue Errno::ECONNRESET
-      @log.add( KNLog::SEV_INFO, "#{$!} while reading.", 'transfer' )
+      log( SEV_INFO, "#{$!} while reading." )
       closeSession( session )
       return
     rescue
-      @log.add( KNLog::SEV_WARN,
-	"Detected an exception. Stopping ... #{$!}\n" << $@.join( "\n" ),
-	'transfer' )
+      log( SEV_WARN, "Detected an exception. Stopping ... #{$!}\n" << $@.join(
+	"\n" ))
       closeSession( session )
       return
     end
 
-    readBuf.sub!( 'Mozilla/4.0 \(compatible; MSIE 4.01; Windows NT\)', 'NaHi SleepyProxy ;-0' )
-
     if ( bServer )
-      @log.add( KNLog::SEV_INFO, 'Transfer data ... [src] -> [dest]',
-	'transfer' )
+      log( SEV_INFO, 'Transfer data ... [src] -> [dest]' )
     else
-      @log.add( KNLog::SEV_INFO, 'Transfer data ... [src] <- [dest]',
-	'transfer' )
+      log( SEV_INFO, 'Transfer data ... [src] <- [dest]' )
     end
 
     dumpData( readBuf ) if ( bServer or @options[0] )
@@ -140,20 +147,19 @@ class TCPSocketPipe
       begin
       	writeSize += writeSock.syswrite( readBuf[writeSize..-1] )
       rescue Errno::ECONNRESET
-      	@log.add( KNLog::SEV_INFO, "#{$!} while writing.", 'transfer' )
+      	log( SEV_INFO, "#{$!} while writing." )
       	closeSession( session )
       	return
       rescue
-      	@log.add( KNLog::SEV_WARN,
-	  "Detected an exception. Stopping ... #{$!}\n" << $@.join( "\n" ),
-	  'transfer' )
+      	log( SEV_WARN, "Detected an exception. Stopping ... #{$!}\n" <<
+	  $@.join( "\n" ))
 	closeSession( session )
 	return
       end
     end
   end
 
-  private; def dumpData( data )
+  def dumpData( data )
     hexDump = @options[1].to_i
     dumpStr = "Transferred data...\n"
     if ( hexDump )
@@ -176,25 +182,25 @@ class TCPSocketPipe
     else
       dumpStr = data
     end
-    @log.add( KNLog::SEV_INFO, dumpStr, 'dumpData' )
+    log( SEV_INFO, dumpStr )
   end
 
-  private; def addSession( serverSock )
+  def addSession( serverSock )
     begin
       clientSock = TCPsocket.new( @destName, @destPort )
     rescue
-      @log.add( KNLog::SEV_ERROR, 'Create client socket failed.', 'addSession' )
+      log( SEV_ERROR, 'Create client socket failed.' )
       return
     end
     @sessionPool.add( serverSock, clientSock )
-    @log.add( KNLog::SEV_INFO, 'Connection established.', 'addSession' )
+    log( SEV_INFO, 'Connection established.' )
   end
 
-  private; def closeSession( session )
+  def closeSession( session )
     session.server.close()
     session.client.close()
     @sessionPool.del( session )
-    @log.add( KNLog::SEV_INFO, 'Connection closed.', 'closeSession' )
+    log( SEV_INFO, 'Connection closed.' )
   end
 end
 
@@ -204,9 +210,8 @@ def main()
   destName = ARGV.shift
   destPort = ARGV.shift
   usage() if ( !srcPort or !destName or !destPort )
-#  log = KNLog.new( STDERR )
-  log = KNLog.new( 'TCPSocketPipe.log', 0 )	# 0 means 'no shifting'
-  ap = TCPSocketPipe.new( srcPort, destName, destPort, log, [ $OPT_d, $OPT_x ])
+  app = TCPSocketPipe::new( srcPort, destName, destPort, [ $OPT_d, $OPT_x ])
+  app.start()
 end
 
 def usage()
