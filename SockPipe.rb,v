@@ -1,0 +1,219 @@
+head	1.1;
+access;
+symbols;
+locks
+	nakahiro:1.1; strict;
+comment	@# @;
+
+
+1.1
+date	99.05.13.11.35.09;	author nakahiro;	state Exp;
+branches;
+next	;
+
+
+desc
+@Basic Socket versin.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/usr/bin/env ruby
+
+require 'thread'
+require 'socket'
+require 'KNLog.rb'
+
+class SockPipe
+  include Socket::Constants
+
+  ListenBackLog = 5		# [item]
+  Timeout = 100			# [sec]
+  ReadBlockSize = 10 * 1024	# [byte]
+  SockAddr = 'S n a4 x8'
+
+  class SessionPool
+    class Session
+      attr( :client )
+      attr( :server )
+      def initialize( server = nil, client = nil )
+      	@@client = server
+      	@@server = client
+      end
+    end
+
+    def initialize()
+      @@array = []
+    end
+
+    def each()
+      @@array.each do |i|
+	yield i
+      end
+    end
+
+    def add( serverSock, clientSock )
+      @@array.push( Session.new( serverSock, clientSock ))
+    end
+
+    def del( sockPair )
+      @@array.delete_if do |i|
+        sockPair.equal?( i )
+      end
+    end
+  end
+
+  def initialize( srcPort, destName, destPort, log )
+    @@srcPort = srcPort.to_i or raise ArgumentError()
+    @@destName = destName or raise ArgumentError()
+    @@destPort = destPort.to_i or raise ArgumentError()
+    @@log = log
+    @@serverSock = nil
+    @@sessionPool = SessionPool.new()
+    begin
+      @@serverSock = createServer( @@srcPort )
+      @@log.add( KNLog::SEV_INFO,
+      	'Started ... SrcPort=%s, DestName=%s, DestPort=%s' %
+      	[ @@srcPort, @@destName, @@destPort ], self.type )
+      run()
+    ensure
+      @@serverSock.close()
+      @@log.add( KNLog::SEV_INFO,
+      	'Stopped ... SrcPort=%s, DestName=%s, DestPort=%s' %
+      	[ @@srcPort, @@destName, @@destPort ], self.type )
+    end
+  end
+
+  def createServer( port )
+    begin
+      sock = Socket.new( PF_INET, SOCK_STREAM, 0 )
+      # can I use `true' instead of (int)1?
+      sock.setsockopt( SOL_SOCKET, SO_REUSEADDR, 1 )
+      sockAddr = [ AF_INET, port, nil ].pack( SockAddr )
+      sock.bind( sockAddr )
+      sock.listen( ListenBackLog )
+    rescue
+    p $!
+      @@log.add( KNLog::SEV_ERROR, 'Create server socket failed.',
+	'createServer' )
+      raise
+    end
+    return sock
+  end
+
+  def run()
+    while true
+      readWait = []
+      @@sessionPool.each do |session|
+	readWait.push( session.server ).push( session.client )
+      end
+      readWait.unshift( @@serverSock )
+      readReady, writeReady, except = IO.select( readWait, nil, nil, Timeout )
+      next unless readReady
+      readReady.each do |sock|
+	if ( @@serverSock.equal?( sock ))
+	  newSock, clientAddr = @@serverSock.accept
+	  addSession( newSock )
+	  @@log.add( KNLog::SEV_INFO, "Accepted ... from " <<
+	    clientAddr.unpack( SockAddr )[2].unpack( 'C4' ).join( '.' ), 'run' )
+	else
+	  @@sessionPool.each do |session|
+	    transfer( session, true ) if ( sock.equal?( session.server ))
+	    transfer( session, false ) if ( sock.equal?( session.client ))
+	  end
+	end
+      end
+    end
+  end
+
+  def transfer( session, bFromServer )
+    readSock = writeSock = nil
+    if ( bFromServer )
+      readSock = session.server
+      writeSock = session.client
+    else
+      readSock = session.client
+      writeSock = session.server
+    end
+
+    readBuf = ''
+    begin
+      readBuf << readSock.sysread( ReadBlockSize )
+    rescue EOFError
+      closeSession( session )
+      return
+    rescue
+      closeSession( session )
+      @@log.add( KNLog::SEV_WARN, $! )
+      return
+    end
+
+    print readBuf
+
+    writeSize = 0
+    while ( writeSize < readBuf.size )
+      begin
+      	writeSize += writeSock.syswrite( readBuf[writeSize..-1] )
+      rescue
+      	@@log.add( KNLog::SEV_WARN, $! )
+	closeSession( session )
+	return
+      end
+    end
+  end
+
+  def addSession( serverSock )
+    begin
+      clientSock = Socket.new( PF_INET, SOCK_STREAM, 0 )
+      hostAddr =
+      	begin
+      	  hostAddr = Socket::gethostbyname( @@destName )[3]
+      	rescue
+      	  raise if ( @@destName !~ /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/ )
+	  hostAddr = [ $1.to_i, $2.to_i, $3.to_i, $4.to_i ].pack( 'CCCC' )
+      	end
+      sockAddr = [ AF_INET, @@destPort, hostAddr ].pack( SockAddr )
+      clientSock.connect( sockAddr )
+    rescue
+      @@log.add( KNLog::SEV_ERROR, 'Create client socket failed.', 'addSession' )
+      return
+    end
+    @@sessionPool.add( serverSock, clientSock )
+  end
+
+  def closeSession( session )
+    session.server.close()
+    session.client.close()
+    @@sessionPool.del( session )
+  end
+end
+
+def main()
+  srcPort = ARGV.shift
+  destName = ARGV.shift
+  destPort = ARGV.shift
+  usage() if ( !srcPort or !destName or !destPort )
+  log = KNLog.new( STDERR )
+  apl = SockPipe.new( srcPort, destName, destPort, log )
+end
+
+def usage()
+  usageStr = <<"EOM"
+Usage: #{$0} srcPort destName destPort
+
+    SockPipe.rb creates I/O pipes for socket tunneling.
+
+    srcPort .... port# of a source(on your machine).
+    destName ... machine name of a destination(name or ip-addr).
+    destPort ... port# of a destination.
+EOM
+  print usageStr
+  exit 1
+end
+
+main() if ( $0 == __FILE__ )
+@
