@@ -3,10 +3,14 @@
 # TCP Tunnel
 # Copyright (c) 2001 by Michael Neumann (neumann@s-direktnet.de)
 #
-# $Id: monitor.rb,v 1.1 2001/07/13 04:13:29 nakahiro Exp $
+# $Id: monitor.rb,v 1.2 2001/07/13 04:24:29 nakahiro Exp $
 # 
 # Modified to use TCPSocketPipe and some tk view.
 # Copyright (c) 2001 NAKAMURA Hiroshi.
+
+# This application is copyrighted free software by Michael Neumann and
+# NAKAMURA, Hiroshi.  You can redistribute it and/or modify it under
+# the same term as Ruby or under BSD License.
 
 require 'TCPSocketPipe'
 require 'tk'
