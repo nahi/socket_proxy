@@ -6,11 +6,18 @@
 # This application is copyrighted free software by NAKAMURA, Hiroshi.
 # You can redistribute it and/or modify it under the same term as Ruby.
 
-RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.5 2000/08/21 03:11:05 nakahiro Exp $
+RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.6 2000/08/21 03:16:17 nakahiro Exp $
 
+# Ruby bundled library
 require 'socket'
 require 'getopts'
+
+# Extra library
+#   'application.rb' by nakahiro@sarion.co.jp
+#     http://www.jin.gr.jp/~nahi/Ruby/ruby.shtml#application
 require 'application'
+#   'dump.rb' by miche@e-mail.ne.jp
+#     http://www.geocities.co.jp/SiliconValley-Oakland/2986/
 require 'dump'
 
 class TCPSocketPipe < Application
