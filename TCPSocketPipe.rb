@@ -6,7 +6,7 @@
 # This application is copyrighted free software by NAKAMURA, Hiroshi.
 # You can redistribute it and/or modify it under the same term as Ruby.
 
-RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.9 2000/09/25 04:54:01 nakahiro Exp $
+RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.10 2001/07/12 02:44:29 nakahiro Exp $
 
 # Ruby bundled library
 require 'socket'
@@ -154,11 +154,9 @@ class TCPSocketPipe < Application
     end
 
     if ( bServer )
-      log( SEV_INFO, 'Transfer data ... [src] -> [dest]' )
-      dumpData( readBuf ) if @dumpRequest
+      dumpTransferData( true, readBuf ) if @dumpRequest
     else
-      log( SEV_INFO, 'Transfer data ... [src] <- [dest]' )
-      dumpData( readBuf ) if @dumpResponse
+      dumpTransferData( false, readBuf ) if @dumpResponse
     end
 
     writeSize = 0
@@ -176,6 +174,15 @@ class TCPSocketPipe < Application
 	return
       end
     end
+  end
+
+  def dumpTransferData( isFromSrcToDestP, data )
+    if isFromSrcToDestP
+      log( SEV_INFO, 'Transfer data ... [src] -> [dest]' )
+    else
+      log( SEV_INFO, 'Transfer data ... [src] <- [dest]' )
+    end
+    dumpData( data )
   end
 
   def dumpData( data )
