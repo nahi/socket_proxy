@@ -6,7 +6,7 @@
 # This application is copyrighted free software by NAKAMURA, Hiroshi.
 # You can redistribute it and/or modify it under the same term as Ruby.
 
-RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.10 2001/07/12 02:44:29 nakahiro Exp $
+RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.11 2001/07/13 04:15:44 nakahiro Exp $
 
 # Ruby bundled library
 require 'socket'
@@ -94,7 +94,7 @@ class TCPSocketPipe < Application
   def run
     @waitSock = TCPServer.new( @srcPort )
     begin
-      log( SEV_INFO, 'Started ... SrcPort=%s, DestName=%s, DestPort=%s' % [ @srcPort, @destName, @destPort ] )
+      dumpStart
 
       while true
         readWait = []
@@ -107,9 +107,9 @@ class TCPSocketPipe < Application
         readReady.each do |sock|
 	  if ( @waitSock.equal?( sock ))
 	    newSock = @waitSock.accept
-	    log( SEV_INFO, 'Accepted ... from ' << newSock.peeraddr[2] )
+	    dumpAccept( newSock.peeraddr[2] )
 	    if !addSession( newSock )
-      	      log( SEV_INFO, 'Closing server socket...' )
+      	      log( SEV_WARN, 'Closing server socket...' )
 	      newSock.close()
 	    end
 	  else
@@ -122,7 +122,7 @@ class TCPSocketPipe < Application
       end
     ensure
       @waitSock.close()
-      log( SEV_INFO, 'Stopped ... SrcPort=%s, DestName=%s, DestPort=%s' % [ @srcPort, @destName, @destPort ] )
+      dumpEnd
     end
   end
 
@@ -176,6 +176,36 @@ class TCPSocketPipe < Application
     end
   end
 
+  def addSession( serverSock )
+    begin
+      clientSock = TCPSocket.new( @destName, @destPort )
+    rescue
+      log( SEV_ERROR, 'Create client socket failed.' )
+      return
+    end
+    @sessionPool.add( serverSock, clientSock )
+    dumpAddSession
+  end
+
+  def closeSession( session )
+    session.server.close()
+    session.client.close()
+    @sessionPool.del( session )
+    dumpCloseSession
+  end
+
+  def dumpStart
+    log( SEV_INFO, 'Started ... SrcPort=%s, DestName=%s, DestPort=%s' % [ @srcPort, @destName, @destPort ] )
+  end
+
+  def dumpAccept( from )
+    log( SEV_INFO, 'Accepted ... from ' << from )
+  end
+
+  def dumpAddSession
+    log( SEV_INFO, 'Connection established.' )
+  end
+
   def dumpTransferData( isFromSrcToDestP, data )
     if isFromSrcToDestP
       log( SEV_INFO, 'Transfer data ... [src] -> [dest]' )
@@ -189,39 +219,31 @@ class TCPSocketPipe < Application
     log( SEV_INFO, "Transferred data;\n" << Debug.dump( data, "x#{ @dumpBytes }", @dumpBigEndian, @dumpWidth, 0 ))
   end
 
-  def addSession( serverSock )
-    begin
-      clientSock = TCPSocket.new( @destName, @destPort )
-    rescue
-      log( SEV_ERROR, 'Create client socket failed.' )
-      return
-    end
-    @sessionPool.add( serverSock, clientSock )
-    log( SEV_INFO, 'Connection established.' )
+  def dumpCloseSession
+    log( SEV_INFO, 'Connection closed.' )
   end
 
-  def closeSession( session )
-    session.server.close()
-    session.client.close()
-    @sessionPool.del( session )
-    log( SEV_INFO, 'Connection closed.' )
+  def dumpEnd
+    log( SEV_INFO, 'Stopped ... SrcPort=%s, DestName=%s, DestPort=%s' % [ @srcPort, @destName, @destPort ] )
   end
 end
 
 def main
-  getopts( 'd', 'e', 'w:', 'x:' )
+  getopts( 'des', 'w:', 'x:' )
   srcPort = ARGV.shift
   destName = ARGV.shift
   destPort = ARGV.shift
   usage() if ( !srcPort or !destName or !destPort )
 
-  # Run as a daemon...
-  exit! if fork
-  Process.setsid
-  exit! if fork
-  STDIN.close
-  STDOUT.close
-  STDERR.close
+  # To run as a daemon...
+  if $OPT_s
+    exit! if fork
+    Process.setsid
+    exit! if fork
+    STDIN.close
+    STDOUT.close
+    STDERR.close
+  end
 
   app = TCPSocketPipe.new( srcPort, destName, destPort )
   app.dumpResponse = true if $OPT_d
@@ -237,13 +259,14 @@ Usage: #{$0} srcPort destName destPort
 
     Creates I/O pipes for TCP socket tunneling.
 
-    srcPort .... source port# on your machine.
-    destName ... machine name of a destination(name or ip-addr).
+    srcPort .... source port# of localhost.
+    destName ... hostname of a destination(name or ip-addr).
     destPort ... destination port# of the destName.
 
   Dump options:
     -d ......... dumps data from destination port(not dumped by default).
     -e ......... interprets bytes as big endian.
+    -s ......... run as a daemon.
     -x [num] ... interprets each [num] bytes.
     -w [num] ... dump [num] bytes in each line.
 
