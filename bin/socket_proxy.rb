@@ -7,10 +7,19 @@
 # You can redistribute it and/or modify it under the same term as Ruby.
 
 require 'socket_proxy'
-require 'getopts'
+require 'getoptlong'
 
 def main
-  getopts('des', 'w:', 'x:')
+  opts = GetoptLong.new(['--debug', '-d', GetoptLong::NO_ARGUMENT], ['--daemon', '-s', GetoptLong::NO_ARGUMENT])
+  opts.each do |name, _|
+    case name
+    when '--debug'
+      debug = true
+    when '--daemon'
+      daemon = true
+    end
+  end
+
   destname = ARGV.shift
   portpairs = []
   while srcport = ARGV.shift
@@ -20,7 +29,7 @@ def main
   usage if portpairs.empty? or !destname
 
   # To run as a daemon...
-  if $OPT_s
+  if daemon
     exit! if fork
     Process.setsid
     exit! if fork
@@ -30,7 +39,7 @@ def main
   end
 
   app = SocketProxy.new(destname, portpairs)
-  app.dump_response = true if $OPT_d
+  app.dump_response = true if debug
   app.start
 end
 
