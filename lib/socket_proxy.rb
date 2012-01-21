@@ -1,5 +1,3 @@
-#!/usr/bin/env ruby
-
 # socket_proxy.rb -- Creates I/O pipes for TCP socket tunneling.
 # Copyright (C) 1999-2001, 2003 NAKAMURA, Hiroshi
 
@@ -8,46 +6,44 @@
 
 # Ruby bundled library
 require 'socket'
-require 'getopts'
-require 'logger'	# http://raa.ruby-lang.org/list.rhtml?name=devel-logger
-
-module Dump
-  # Written by Arai-san and published at [ruby-list:31987].
-  # http://blade.nagaokaut.ac.jp/cgi-bin/scat.rb/ruby/ruby-list/31987
-  def hexdump(str)
-    offset = 0
-    result = []
-    while raw = str.slice(offset, 16) and raw.length > 0
-      # data field
-      data = ''
-      for v in raw.unpack('N* a*')
-	if v.kind_of? Integer
-	  data << sprintf("%08x ", v)
-	else
-	  v.each_byte {|c| data << sprintf("%02x", c) }
-	end
-      end
-      # text field
-      text = raw.tr("\000-\037\177-\377", ".")
-      result << sprintf("%08x  %-36s  %s", offset, data, text)
-      offset += 16
-      # omit duplicate line
-      if /^(#{ Regexp.quote(raw) })+/n =~ str[offset .. -1]
-	result << sprintf("%08x  ...", offset)
-	offset += $&.length
-	# should print at the end
-	if offset == str.length
-	  result << sprintf("%08x  %-36s  %s", offset-16, data, text)
-	end
-      end
-    end
-    result
-  end
-  module_function :hexdump
-end
-
+require 'logger'
 
 class SocketProxy < Logger::Application
+  module Dump
+    # Written by Arai-san and published at [ruby-list:31987].
+    # http://blade.nagaokaut.ac.jp/cgi-bin/scat.rb/ruby/ruby-list/31987
+    def hexdump(str)
+      offset = 0
+      result = []
+      while raw = str.slice(offset, 16) and raw.length > 0
+        # data field
+        data = ''
+        for v in raw.unpack('N* a*')
+          if v.kind_of? Integer
+            data << sprintf("%08x ", v)
+          else
+            v.each_byte {|c| data << sprintf("%02x", c) }
+          end
+        end
+        # text field
+        text = raw.tr("\000-\037\177-\377", ".")
+        result << sprintf("%08x  %-36s  %s", offset, data, text)
+        offset += 16
+        # omit duplicate line
+        if /^(#{ Regexp.quote(raw) })+/n =~ str[offset .. -1]
+          result << sprintf("%08x  ...", offset)
+          offset += $&.length
+          # should print at the end
+          if offset == str.length
+            result << sprintf("%08x  %-36s  %s", offset-16, data, text)
+          end
+        end
+      end
+      result
+    end
+    module_function :hexdump
+  end
+
   include Logger::Severity
   include Socket::Constants
 
@@ -303,47 +299,3 @@ private
     log(INFO) { 'Stopped ... src=%s, dest=%s@%s' % [srcport, destport, @destname] }
   end
 end
-
-def main
-  getopts('des', 'w:', 'x:')
-  destname = ARGV.shift
-  portpairs = []
-  while srcport = ARGV.shift
-    destport = ARGV.shift or raise ArgumentError.new("Port must be given as a pair of src and dest.")
-    portpairs << [srcport, destport]
-  end
-  usage if portpairs.empty? or !destname
-
-  # To run as a daemon...
-  if $OPT_s
-    exit! if fork
-    Process.setsid
-    exit! if fork
-    STDIN.close
-    STDOUT.close
-    STDERR.close
-  end
-
-  app = SocketProxy.new(destname, portpairs)
-  app.dump_response = true if $OPT_d
-  app.start
-end
-
-def usage
-  STDERR.print <<EOM
-Usage: #{$0} [OPTIONS] destname srcport destport [[srcport destport]...]
-
-    Creates I/O pipes for TCP socket tunneling.
-
-    destname ... hostname of a destination(name or ip-addr).
-    srcport .... source TCP port# or UNIX domain socket name of localhost.
-    destport ... destination port# of the destination host.
-
-  OPTIONS:
-    -d ......... dumps data from destination port(not dumped by default).
-    -s ......... run as a daemon.
-EOM
-  exit 1
-end
-
-main if $0 == __FILE__
