@@ -1,42 +1,73 @@
 #!/usr/bin/env ruby
 
-# TCPSocketPipe.rb -- Creates I/O pipes for TCP socket tunneling.
-# Copyright (C) 1999-2001 NAKAMURA, Hiroshi
+# socket_proxy.rb -- Creates I/O pipes for TCP socket tunneling.
+# Copyright (C) 1999-2001, 2003 NAKAMURA, Hiroshi
 
 # This application is copyrighted free software by NAKAMURA, Hiroshi.
 # You can redistribute it and/or modify it under the same term as Ruby.
 
-RCS_ID = %q$Id: TCPSocketPipe.rb,v 1.12 2001/07/13 04:16:55 nakahiro Exp $
-
 # Ruby bundled library
 require 'socket'
 require 'getopts'
+require 'logger'	# http://raa.ruby-lang.org/list.rhtml?name=devel-logger
 
-# Extra library
-#   'application.rb' by nakahiro@sarion.co.jp
-#     http://www.jin.gr.jp/~nahi/Ruby/ruby.shtml#application
-require 'application'
-#   'dump.rb' by miche@e-mail.ne.jp
-#     http://www.geocities.co.jp/SiliconValley-Oakland/2986/
-require 'dump'
+module Dump
+  # Written by Arai-san and published at [ruby-list:31987].
+  # http://blade.nagaokaut.ac.jp/cgi-bin/scat.rb/ruby/ruby-list/31987
+  def hexdump(str)
+    offset = 0
+    result = []
+    while raw = str.slice(offset, 16) and raw.length > 0
+      # data field
+      data = ''
+      for v in raw.unpack('N* a*')
+	if v.kind_of? Integer
+	  data << sprintf("%08x ", v)
+	else
+	  v.each_byte {|c| data << sprintf("%02x", c) }
+	end
+      end
+      # text field
+      text = raw.tr("\000-\037\177-\377", ".")
+      result << sprintf("%08x  %-36s  %s", offset, data, text)
+      offset += 16
+      # omit duplicate line
+      if /^(#{ Regexp.quote(raw) })+/n =~ str[offset .. -1]
+	result << sprintf("%08x  ...", offset)
+	offset += $&.length
+	# should print at the end
+	if offset == str.length
+	  result << sprintf("%08x  %-36s  %s", offset-16, data, text)
+	end
+      end
+    end
+    result
+  end
+  module_function :hexdump
+end
 
-class TCPSocketPipe < Application
-  include Log::Severity
+
+class SocketProxy < Logger::Application
+  include Logger::Severity
   include Socket::Constants
 
-  attr_accessor :dumpRequest
-  attr_accessor :dumpResponse
-  attr_accessor :dumpBytes
-  attr_accessor :dumpBigEndian
-  attr_accessor :dumpWidth
+  attr_accessor :dump_request
+  attr_accessor :dump_response
 
-  private
+private
 
   Timeout = 100			# [sec]
   ReadBlockSize = 10 * 1024	# [byte]
 
   class SessionPool
-    public
+    def initialize
+      @pool = []
+      @sockets = []
+    end
+
+    def sockets
+      @sockets
+    end
 
     def each
       @pool.each do |i|
@@ -44,196 +75,244 @@ class TCPSocketPipe < Application
       end
     end
 
-    def add( serverSock, clientSock )
-      @pool.push( Session.new( serverSock, clientSock ))
+    def add(svrsock, clntsock)
+      @pool.push(Session.new(svrsock, clntsock))
+      @sockets.push(svrsock, clntsock)
     end
 
-    def del( session )
-      @pool.delete_if do |i|
-        session.equal?( i )
-      end
+    def del(session)
+      @pool.delete(session)
+      @sockets.delete(session.server)
+      @sockets.delete(session.client)
     end
 
-    private
+  private
 
     class Session
-      attr( :server )
-      attr( :client )
+      attr(:server)
+      attr(:client)
+
+      def closed?
+        @server.closed? and @client.closed?
+      end
 
       private
 
-      def initialize( server = nil, client = nil )
+      def initialize(server = nil, client = nil)
       	@server = server
       	@client = client
       end
     end
+  end
 
-    def initialize
-      @pool = []
+  class ListenSocketHash < Hash
+    def sockets
+      keys
     end
   end
 
-  AppName = 'TCPSocketPipe'
+  AppName = File.basename(__FILE__)
   ShiftAge = 0
   ShiftSize = 0
 
-  def initialize( srcPort, destName, destPort )
-    super( AppName )
-    setLog( AppName + '.log', ShiftAge, ShiftSize )
-    @srcPort = srcPort.to_i
-    @destName = destName
-    @destPort = destPort.to_i
-    @dumpRequest = true
-    @dumpResponse = false
-    @dumpBytes = 1
-    @dumpWidth = 16
-    @dumpBigEndian = false
-    @sessionPool = SessionPool.new()
+  def initialize(destname, portpairs)
+    super(AppName)
+    set_log(AppName + '.log', ShiftAge, ShiftSize)
+    @log.level = Logger::INFO
+    @destname = destname
+    @portpairs = portpairs
+    @dump_request = true
+    @dump_response = false
+    @sessionpool = SessionPool.new
+    @waitsockets = nil
+  end
+
+  def init_waitsockets
+    @waitsockets = ListenSocketHash.new
+    @portpairs.each do |srcport, destport|
+      wait = if is_for_tcp(srcport)
+	  TCPServer.new(srcport.to_i)
+	else
+	  UNIXServer.new(srcport)
+	end
+      @waitsockets[wait] = [srcport, destport]
+      dump_start(srcport, destport)
+    end
+  end
+
+  def terminate_waitsockets
+    @waitsockets.each do |sock, portpair|
+      sock.close
+      srcport, destport = portpair
+      File.unlink(srcport) unless is_for_tcp(srcport)
+      dump_end(srcport, destport)
+    end
+  end
+
+  def is_for_tcp(srcport)
+    srcport.to_i != 0
   end
 
   def run
-    @waitSock = TCPServer.new( @srcPort )
     begin
-      dumpStart
-
+      init_waitsockets
       while true
-        readWait = []
-        @sessionPool.each do |session|
-	  readWait.push( session.server ).push( session.client )
-        end
-        readWait.unshift( @waitSock )
-        readReady, writeReady, except = IO.select( readWait, nil, nil, Timeout )
-        next unless readReady
-        readReady.each do |sock|
-	  if ( @waitSock.equal?( sock ))
-	    newSock = @waitSock.accept
-	    dumpAccept( newSock.peeraddr[2] )
-	    if !addSession( newSock )
-      	      log( SEV_WARN, 'Closing server socket...' )
-	      newSock.close()
+	readwait = @sessionpool.sockets + @waitsockets.sockets
+        readready, = IO.select(readwait, nil, nil, Timeout)
+        next unless readready
+        readready.each do |sock|
+	  if (portpair = @waitsockets[sock])
+	    newsock = sock.accept
+	    dump_accept(newsock.peeraddr[2], portpair)
+	    if !add_session(newsock, portpair)
+      	      log(WARN) { 'Closing server socket...' }
+	      newsock.close
 	    end
 	  else
-	    @sessionPool.each do |session|
-	      transfer( session, true ) if ( sock.equal?( session.server ))
-	      transfer( session, false ) if ( sock.equal?( session.client ))
+	    @sessionpool.each do |session|
+	      if sock.equal?(session.server)
+		transfer(session, true)
+		next
+	      elsif sock.equal?(session.client)
+		transfer(session, false)
+		next
+	      end
 	    end
 	  end
 	end
       end
     ensure
-      @waitSock.close()
-      dumpEnd
+      terminate_waitsockets
     end
   end
 
-  def transfer( session, bServer )
-    readSock = nil
-    writeSock = nil
-    if ( bServer )
-      readSock = session.server
-      writeSock = session.client
+  def transfer(session, is_server)
+    readsock = nil
+    writesock = nil
+    if is_server
+      readsock = session.server
+      writesock = session.client
     else
-      readSock = session.client
-      writeSock = session.server
+      readsock = session.client
+      writesock = session.server
     end
 
-    readBuf = ''
+    readbuf = nil
     begin
-      readBuf << readSock.sysread( ReadBlockSize )
+      readbuf = readsock.sysread(ReadBlockSize)
+    rescue IOError
+      # not opend for reading
+      close_session(session, readsock, writesock)
+      return
     rescue EOFError
-      closeSession( session )
+      close_session(session, readsock, writesock)
       return
     rescue Errno::ECONNRESET
-      log( SEV_INFO, "#{$!} while reading." )
-      closeSession( session )
+      log(INFO) { "#{$!} while reading." }
+      close_session(session, readsock, writesock)
       return
     rescue
-      log( SEV_WARN, "Detected an exception. Stopping ... #{$!}\n" << $@.join( "\n" ))
-      closeSession( session )
+      log(WARN) { "Detected an exception. Stopping ..." }
+      log(WARN) { $! }
+      log(WARN) { $@ }
+      close_session(session, readsock, writesock)
       return
     end
 
-    if ( bServer )
-      dumpTransferData( true, readBuf ) if @dumpRequest
+    if is_server
+      dump_transfer_data(true, readbuf) if @dump_request
     else
-      dumpTransferData( false, readBuf ) if @dumpResponse
+      dump_transfer_data(false, readbuf) if @dump_response
     end
 
-    writeSize = 0
-    while ( writeSize < readBuf.size )
+    writesize = 0
+    while (writesize < readbuf.size)
       begin
-      	writeSize += writeSock.syswrite( readBuf[writeSize..-1] )
+      	writesize += writesock.syswrite(readbuf[writesize..-1])
       rescue Errno::ECONNRESET
-      	log( SEV_INFO, "#{$!} while writing." )
-      	closeSession( session )
+      	log(INFO) { "#{$!} while writing." }
+	log(INFO) { $@ }
+        close_session(session, readsock, writesock)
       	return
       rescue
-      	log( SEV_WARN, "Detected an exception. Stopping ... #{$!}\n" <<
-	  $@.join( "\n" ))
-	closeSession( session )
+	log(WARN) { "Detected an exception. Stopping ..." }
+	log(WARN) { $@ }
+        close_session(session, readsock, writesock)
 	return
       end
     end
   end
 
-  def addSession( serverSock )
+  def add_session(svrsock, portpair)
+    srcport, destport = portpair
     begin
-      clientSock = TCPSocket.new( @destName, @destPort )
+      clntsock = TCPSocket.new(@destname, destport)
     rescue
-      log( SEV_ERROR, 'Create client socket failed.' )
+      log(ERROR) { 'Create client socket failed.' }
       return
     end
-    @sessionPool.add( serverSock, clientSock )
-    dumpAddSession
+    @sessionpool.add(svrsock, clntsock)
+    dump_add_session(portpair)
   end
 
-  def closeSession( session )
-    session.server.close()
-    session.client.close()
-    @sessionPool.del( session )
-    dumpCloseSession
-  end
-
-  def dumpStart
-    log( SEV_INFO, 'Started ... SrcPort=%s, DestName=%s, DestPort=%s' % [ @srcPort, @destName, @destPort ] )
-  end
-
-  def dumpAccept( from )
-    log( SEV_INFO, 'Accepted ... from ' << from )
-  end
-
-  def dumpAddSession
-    log( SEV_INFO, 'Connection established.' )
-  end
-
-  def dumpTransferData( isFromSrcToDestP, data )
-    if isFromSrcToDestP
-      log( SEV_INFO, 'Transfer data ... [src] -> [dest]' )
-    else
-      log( SEV_INFO, 'Transfer data ... [src] <- [dest]' )
+  def close_session(session, readsock, writesock)
+    readsock.close_read
+    writesock.close_write
+    if session.closed?
+      @sessionpool.del(session)
+      dump_close_session
     end
-    dumpData( data )
   end
 
-  def dumpData( data )
-    log( SEV_INFO, "Transferred data;\n" << Debug.dump( data, "x#{ @dumpBytes }", @dumpBigEndian, @dumpWidth, 0 ))
+  def dump_start(srcport, destport)
+    log(INFO) { 'Started ... src=%s, dest=%s@%s' % [srcport, destport, @destname] }
   end
 
-  def dumpCloseSession
-    log( SEV_INFO, 'Connection closed.' )
+  def dump_accept(from, portpair)
+    log(INFO) {
+      srcport, destport = portpair
+      "Accepted ... src=%s from %s" % [srcport, from]
+    }
   end
 
-  def dumpEnd
-    log( SEV_INFO, 'Stopped ... SrcPort=%s, DestName=%s, DestPort=%s' % [ @srcPort, @destName, @destPort ] )
+  def dump_add_session(portpair)
+    log(INFO) {
+      srcport, destport = portpair
+      'Connection established ... src=%s dest=%s@%s' % [srcport, destport, @destname]
+    }
+  end
+
+  def dump_transfer_data(is_src2dest, data)
+    if is_src2dest
+      log(INFO) { 'Transfer data ... [src] -> [dest]' }
+    else
+      log(INFO) { 'Transfer data ... [src] <- [dest]' }
+    end
+    dump_data(data)
+  end
+
+  def dump_data(data)
+    log(INFO) { "Transferred data;\n" << Dump.hexdump(data).join("\n") }
+  end
+
+  def dump_close_session
+    log(INFO) { 'Connection closed.' }
+  end
+
+  def dump_end(srcport, destport)
+    log(INFO) { 'Stopped ... src=%s, dest=%s@%s' % [srcport, destport, @destname] }
   end
 end
 
 def main
-  getopts( 'des', 'w:', 'x:' )
-  srcPort = ARGV.shift
-  destName = ARGV.shift
-  destPort = ARGV.shift
-  usage() if ( !srcPort or !destName or !destPort )
+  getopts('des', 'w:', 'x:')
+  destname = ARGV.shift
+  portpairs = []
+  while srcport = ARGV.shift
+    destport = ARGV.shift or raise ArgumentError.new("Port must be given as a pair of src and dest.")
+    portpairs << [srcport, destport]
+  end
+  usage if portpairs.empty? or !destname
 
   # To run as a daemon...
   if $OPT_s
@@ -245,34 +324,26 @@ def main
     STDERR.close
   end
 
-  app = TCPSocketPipe.new( srcPort, destName, destPort )
-  app.dumpResponse = true if $OPT_d
-  app.dumpBigEndian = true if $OPT_e
-  app.dumpWidth = $OPT_w.to_i if $OPT_w
-  app.dumpBytes = $OPT_x.to_i if $OPT_x
-  app.start()
+  app = SocketProxy.new(destname, portpairs)
+  app.dump_response = true if $OPT_d
+  app.start
 end
 
 def usage
   STDERR.print <<EOM
-Usage: #{$0} srcPort destName destPort
+Usage: #{$0} [OPTIONS] destname srcport destport [[srcport destport]...]
 
     Creates I/O pipes for TCP socket tunneling.
 
-    srcPort .... source port# of localhost.
-    destName ... hostname of a destination(name or ip-addr).
-    destPort ... destination port# of the destName.
+    destname ... hostname of a destination(name or ip-addr).
+    srcport .... source TCP port# or UNIX domain socket name of localhost.
+    destport ... destination port# of the destination host.
 
-  Dump options:
+  OPTIONS:
     -d ......... dumps data from destination port(not dumped by default).
-    -e ......... interprets bytes as big endian.
     -s ......... run as a daemon.
-    -x [num] ... interprets each [num] bytes.
-    -w [num] ... dump [num] bytes in each line.
-
-#{RCS_ID}
 EOM
   exit 1
 end
 
-main() if ( $0 == __FILE__ )
+main if $0 == __FILE__
