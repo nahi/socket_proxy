@@ -1,0 +1,15 @@
+socket_proxy - Creates I/O pipes for TCP socket tunneling.
+
+
+== Author
+
+Name:: Hiroshi Nakamura
+E-mail:: nahi@ruby-lang.org
+Project web site:: http://github.com/nahi/socket_proxy
+
+
+== License
+
+This program is copyrighted free software by Hiroshi Nakamura.  You can
+redistribute it and/or modify it under the same terms of Ruby's license;
+either the dual license version in 2003, or any later version.
