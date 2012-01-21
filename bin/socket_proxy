@@ -60,4 +60,4 @@ EOM
   exit 1
 end
 
-main if $0 == __FILE__
+main
